@@ -1,55 +1,107 @@
 const nodemailer = require("nodemailer");
 
-// Create a test account for ethereal.email if in development
 let transporter;
 
 async function createTransporter() {
-  if (process.env.NODE_ENV === 'test') {
-    const testAccount = await nodemailer.createTestAccount();
-    return nodemailer.createTransport({
-      host: 'smtp.ethereal.email',
-      port: 587,
-      secure: false,
-      auth: {
-        user: testAccount.user,
-        pass: testAccount.pass,
-      },
-    });
+  // Development/Test environment with ethereal.email
+  if (process.env.NODE_ENV !== 'production') {
+    try {
+      const testAccount = await nodemailer.createTestAccount();
+      const devTransporter = nodemailer.createTransport({
+        host: 'smtp.ethereal.email',
+        port: 587,
+        secure: false,
+        auth: {
+          user: testAccount.user,
+          pass: testAccount.pass,
+        },
+      });
+      console.log('Using ethereal.email for email in development');
+      return devTransporter;
+    } catch (error) {
+      console.warn('Failed to create ethereal test account, falling back to Gmail');
+    }
   }
 
-  // Production/development with Gmail
-  return nodemailer.createTransport({
-    service: 'gmail',
-    host: 'smtp.gmail.com',
-    port: 587,
-    secure: false, // true for 465, false for other ports
+  // Production with Gmail or other SMTP service
+  const config = {
+    host: process.env.EMAIL_HOST || 'smtp.gmail.com',
+    port: parseInt(process.env.EMAIL_PORT || '587', 10),
+    secure: process.env.EMAIL_SECURE === 'true', // true for 465, false for other ports
     auth: {
       user: process.env.EMAIL_USER,
       pass: process.env.EMAIL_PASS,
     },
     tls: {
-      rejectUnauthorized: false // Only for development/testing
+      // Do not fail on invalid certs
+      rejectUnauthorized: process.env.NODE_ENV === 'production' ? true : false
     },
-    connectionTimeout: 10000, // 10 seconds
-    greetingTimeout: 5000, // 5 seconds
-    socketTimeout: 10000, // 10 seconds
+    // Timeouts
+    connectionTimeout: 30000, // 30 seconds
+    greetingTimeout: 30000,   // 30 seconds
+    socketTimeout: 60000,     // 60 seconds
+    // Debug
+    debug: process.env.NODE_ENV !== 'production',
+    logger: process.env.NODE_ENV !== 'production'
+  };
+
+  // If service is specified, it will override host/port
+  if (process.env.EMAIL_SERVICE) {
+    config.service = process.env.EMAIL_SERVICE;
+    delete config.host;
+    delete config.port;
+  }
+
+  console.log('Creating email transporter with config:', {
+    ...config,
+    auth: { ...config.auth, pass: '***' } // Don't log password
   });
+
+  return nodemailer.createTransport(config);
 }
 
-// Initialize transporter
-(async () => {
+// Initialize transporter with retry logic
+const MAX_RETRIES = 3;
+const RETRY_DELAY = 5000; // 5 seconds
+
+async function initializeEmailService(retryCount = 0) {
   try {
-    transporter = await createTransporter();
-    // Verify connection configuration
-    await transporter.verify();
-    console.log('Email server is ready to take our messages');
+    console.log(`Initializing email service (attempt ${retryCount + 1}/${MAX_RETRIES})`);
+    
+    // Create new transporter
+    const newTransporter = await createTransporter();
+    
+    // Test the connection
+    await newTransporter.verify();
+    
+    // If we get here, connection is good
+    transporter = newTransporter;
+    console.log('✅ Email server is ready to take our messages');
+    return true;
+    
   } catch (error) {
-    console.error('Email server configuration error:', error.message);
-    if (process.env.NODE_ENV !== 'production') {
-      console.warn('Email sending will fail. In development, you can use ethereal.email for testing.');
+    console.error(`❌ Email service initialization failed (attempt ${retryCount + 1}):`, error.message);
+    
+    if (retryCount < MAX_RETRIES - 1) {
+      console.log(`Retrying in ${RETRY_DELAY/1000} seconds...`);
+      await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+      return initializeEmailService(retryCount + 1);
+    } else {
+      console.error('❌ Max retries reached. Email service is not available.');
+      if (process.env.NODE_ENV !== 'production') {
+        console.warn('In development, you can use ethereal.email for testing.');
+      }
+      return false;
     }
   }
-})();
+}
+
+// Start the email service
+initializeEmailService().then(success => {
+  if (!success) {
+    console.warn('Email service is not available. Some features may not work.');
+  }
+});
 
 async function sendOtpEmail(to, otp) {
   if (!transporter) {
