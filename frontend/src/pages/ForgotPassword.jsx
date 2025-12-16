@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 
 export default function ForgotPassword() {
   const [email, setEmail] = useState("");
+  const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
   const submit = async (e) => {
@@ -13,11 +14,14 @@ export default function ForgotPassword() {
         alert("Please enter your email");
         return;
       }
+      setLoading(true);
       await API.post("/auth/forgot-password", { email });
       alert("OTP sent to your Gmail! Now enter the OTP to reset your password.");
       navigate("/reset-password", { state: { email } });
     } catch (err) {
-      alert(err.response?.data?.message || "Error sending OTP");
+      alert(err.response?.data?.error || err.response?.data?.message || "Error sending OTP");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -34,8 +38,8 @@ export default function ForgotPassword() {
           onChange={(e) => setEmail(e.target.value)}
         />
 
-        <button className="bg-yellow-500 hover:bg-yellow-400 text-black p-2 w-full rounded">
-          Send OTP
+        <button disabled={loading} className="bg-yellow-500 hover:bg-yellow-400 disabled:opacity-50 text-black p-2 w-full rounded">
+          {loading ? "Sending..." : "Send OTP"}
         </button>
       </form>
     </div>

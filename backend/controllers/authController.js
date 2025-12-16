@@ -79,7 +79,10 @@ const forgotPassword = async (req, res) => {
     user.resetOtpExpires = Date.now() + 5 * 60 * 1000; // 5 minutes
     await user.save();
 
-    await sendOtpEmail(email, otp);
+    // Send email asynchronously without blocking response
+    sendOtpEmail(email, otp).catch((err) => {
+      console.error("Failed to send OTP email:", err);
+    });
 
     res.json({ message: "OTP sent to your email" });
   } catch (error) {
@@ -105,8 +108,16 @@ const resetPassword = async (req, res) => {
       return res.status(404).json({ error: "User not found" });
     }
 
-    if (user.resetOtp !== parseInt(otp) || Date.now() > user.resetOtpExpires) {
-      return res.status(400).json({ error: "Invalid or expired OTP" });
+    if (!user.resetOtp || !user.resetOtpExpires) {
+      return res.status(400).json({ error: "OTP not requested. Please use forgot password first." });
+    }
+
+    if (user.resetOtp !== parseInt(otp)) {
+      return res.status(400).json({ error: "Invalid OTP" });
+    }
+
+    if (Date.now() > user.resetOtpExpires) {
+      return res.status(400).json({ error: "OTP has expired" });
     }
 
     const hashedPassword = await bcrypt.hash(newPassword, 10);

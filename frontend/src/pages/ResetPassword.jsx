@@ -6,8 +6,10 @@ export default function ResetPassword() {
   const [form, setForm] = useState({
     email: "",
     otp: "",
-    newPassword: ""
+    newPassword: "",
+    confirmPassword: ""
   });
+  const [loading, setLoading] = useState(false);
   const location = useLocation();
 
   useEffect(() => {
@@ -19,15 +21,22 @@ export default function ResetPassword() {
   const submit = async (e) => {
     e.preventDefault();
     try {
-      if (!form.email || !form.otp || !form.newPassword) {
+      if (!form.email || !form.otp || !form.newPassword || !form.confirmPassword) {
         alert("Please fill in all fields");
         return;
       }
+      if (form.newPassword !== form.confirmPassword) {
+        alert("Passwords do not match");
+        return;
+      }
+      setLoading(true);
       await API.post("/auth/reset-password", form);
       alert("Password Reset! Login again.");
-      setForm({ email: "", otp: "", newPassword: "" });
+      setForm({ email: "", otp: "", newPassword: "", confirmPassword: "" });
     } catch (err) {
-      alert(err.response?.data?.message || "Password reset failed");
+      alert(err.response?.data?.error || err.response?.data?.message || "Password reset failed");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -60,7 +69,15 @@ export default function ResetPassword() {
           onChange={(e) => setForm({ ...form, newPassword: e.target.value })}
         />
 
-        <button className="bg-green-600 hover:bg-green-500 text-white p-2 w-full rounded">
+        <input
+          type="password"
+          placeholder="Confirm Password"
+          value={form.confirmPassword}
+          className="border border-yellow-700 bg-black/60 text-white p-2 w-full rounded"
+          onChange={(e) => setForm({ ...form, confirmPassword: e.target.value })}
+        />
+
+        <button disabled={loading} className="bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white p-2 w-full rounded">
           Reset Password
         </button>
       </form>
