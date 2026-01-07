@@ -2,13 +2,16 @@ const User = require("../models/User");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { sendOtpEmail } = require("../services/emailService");
+const { OAuth2Client } = require("google-auth-library");
+
+const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 // Signup
 const signup = async (req, res) => {
   try {
-    const { email, password, confirmPassword } = req.body;
+    const { name, email, phone, password, confirmPassword } = req.body;
 
-    if (!email || !password || !confirmPassword) {
+    if (!name || !email || !phone || !password || !confirmPassword) {
       return res.status(400).json({ error: "All fields are required" });
     }
 
@@ -22,7 +25,13 @@ const signup = async (req, res) => {
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    const newUser = new User({ email, password: hashedPassword });
+    const newUser = new User({ 
+      name, 
+      email, 
+      phone, 
+      password: hashedPassword,
+      authMethod: "email"
+    });
     await newUser.save();
 
     res.status(201).json({ message: "User registered successfully" });
@@ -30,6 +39,86 @@ const signup = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
+
+// Google Signup/Login with Token
+const googleAuth = async (req, res) => {
+  try {
+    const { idToken, name, email } = req.body;
+
+    if (!idToken || !email) {
+      return res.status(400).json({ error: "Token and email are required" });
+    }
+
+    // Verify the token with Google
+    let payload;
+    try {
+      const ticket = await googleClient.verifyIdToken({
+        idToken: idToken,
+        audience: process.env.GOOGLE_CLIENT_ID,
+      });
+      payload = ticket.getPayload();
+    } catch (error) {
+      return res.status(401).json({ error: "Invalid Google token" });
+    }
+
+    // Check if user exists
+    let user = await User.findOne({ email });
+    
+    if (user) {
+      // User exists - check if they signed up with Google
+      if (user.authMethod !== "google") {
+        return res.status(400).json({ 
+          error: "This email is registered with password login. Please use email/password to login." 
+        });
+      }
+      
+      if (user.isBlocked) {
+        return res.status(403).json({ error: "Your account has been blocked by admin" });
+      }
+    } else {
+      // Create new user with Google
+      user = new User({
+        name: name || payload.name || email.split("@")[0],
+        email: email,
+        googleId: payload.sub,
+        authMethod: "google",
+        phone: null
+      });
+      await user.save();
+    }
+
+    // Generate JWT token
+    const token = jwt.sign(
+      { userId: user._id, email: user.email, role: "user" },
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    res.json({
+      token,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+        authMethod: user.authMethod,
+        role: "user"
+      }
+    });
+  } catch (error) {
+    console.error("Google auth error:", error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// FIX: Login should support both Admin and Normal User
+// Requirements:
+// 1. Admin and User have separate MongoDB models (Admin, User)
+// 2. Admin login → role = "admin"
+// 3. User login → role = "user"
+// 4. JWT token must include role
+// 5. Blocked users must not login
+// Rewrite the login function below according to the above requirements
 
 // Login
 const login = async (req, res) => {
@@ -42,19 +131,30 @@ const login = async (req, res) => {
 
     const user = await User.findOne({ email });
     if (!user) {
-      return res.status(401).json({ error: "Invalid credentials" });
+      return res.status(404).json({ error: "Email doesn't exist" });
+    }
+
+    // Check if user signed up with Google
+    if (user.authMethod === "google") {
+      return res.status(400).json({ 
+        error: "This account was created with Google. Please login with Google." 
+      });
+    }
+
+    if (user.isBlocked) {
+      return res.status(403).json({ error: "Your account has been blocked by admin" });
     }
 
     const isPasswordValid = await bcrypt.compare(password, user.password);
     if (!isPasswordValid) {
-      return res.status(401).json({ error: "Invalid credentials" });
+      return res.status(401).json({ error: "Wrong password" });
     }
 
-    const token = jwt.sign({ userId: user._id, email: user.email }, process.env.JWT_SECRET, {
+    const token = jwt.sign({ userId: user._id, email: user.email, role: "user" }, process.env.JWT_SECRET, {
       expiresIn: "7d"
     });
 
-    res.json({ token, user: { id: user._id, email: user.email } });
+    res.json({ token, user: { id: user._id, name: user.name, email: user.email, phone: user.phone, role: "user" } });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -75,9 +175,15 @@ const forgotPassword = async (req, res) => {
     }
 
     const otp = Math.floor(100000 + Math.random() * 900000);
-    user.resetOtp = otp;
-    user.resetOtpExpires = Date.now() + 5 * 60 * 1000; // 5 minutes
-    await user.save();
+    
+    // Use updateOne to avoid validation on other fields
+    await User.updateOne(
+      { email },
+      {
+        resetOtp: otp,
+        resetOtpExpires: Date.now() + 5 * 60 * 1000 // 5 minutes
+      }
+    );
 
     // Send email asynchronously without blocking response
     sendOtpEmail(email, otp).catch((err) => {
@@ -121,10 +227,16 @@ const resetPassword = async (req, res) => {
     }
 
     const hashedPassword = await bcrypt.hash(newPassword, 10);
-    user.password = hashedPassword;
-    user.resetOtp = undefined;
-    user.resetOtpExpires = undefined;
-    await user.save();
+    
+    // Use updateOne to avoid validation on other fields
+    await User.updateOne(
+      { email },
+      {
+        password: hashedPassword,
+        resetOtp: undefined,
+        resetOtpExpires: undefined
+      }
+    );
 
     res.json({ message: "Password reset successfully" });
   } catch (error) {
@@ -132,4 +244,17 @@ const resetPassword = async (req, res) => {
   }
 };
 
-module.exports = { signup, login, forgotPassword, resetPassword };
+// Get User Profile
+const getUserProfile = async (req, res) => {
+  try {
+    const user = await User.findById(req.userId).select("-password");
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    res.json(user);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+module.exports = { signup, login, googleAuth, forgotPassword, resetPassword, getUserProfile };

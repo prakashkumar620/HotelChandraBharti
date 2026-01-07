@@ -1,30 +1,31 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useContext } from "react";
 import { API } from "../utils/api";
 import { Link, useNavigate } from "react-router-dom";
 import AdminNavbar from "../components/AdminNavbar";
+import { AuthContext } from "../context/AuthContext";
 
 export default function AdminMenu() {
   const [items, setItems] = useState([]);
   const navigate = useNavigate();
-  const token = localStorage.getItem("adminToken");
+  const { adminToken } = useContext(AuthContext);
 
   useEffect(() => {
-    if (!token) {
+    if (!adminToken) {
       navigate("/admin/login");
       return;
     }
     const load = async () => {
       const res = await API.get("/admin/menu", {
-        headers: { Authorization: `Bearer ${token}` }
+        headers: { Authorization: `Bearer ${adminToken}` }
       });
       setItems(res.data);
     };
     load();
-  }, [token, navigate]);
+  }, [adminToken, navigate]);
 
   const deleteItem = async (id) => {
     await API.delete(`/menu/${id}`, {
-      headers: { Authorization: `Bearer ${token}` }
+      headers: { Authorization: `Bearer ${adminToken}` }
     });
     setItems((prev) => prev.filter((i) => i._id !== id));
   };

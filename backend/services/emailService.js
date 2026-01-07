@@ -2,151 +2,212 @@ const nodemailer = require("nodemailer");
 
 let transporter;
 
-async function createTransporter() {
-  // Development/Test environment with ethereal.email
-  if (process.env.NODE_ENV !== 'production') {
-    try {
-      const testAccount = await nodemailer.createTestAccount();
-      const devTransporter = nodemailer.createTransport({
-        host: 'smtp.ethereal.email',
-        port: 587,
-        secure: false,
-        auth: {
-          user: testAccount.user,
-          pass: testAccount.pass,
-        },
-      });
-      console.log('Using ethereal.email for email in development');
-      return devTransporter;
-    } catch (error) {
-      console.warn('Failed to create ethereal test account, falling back to Gmail');
-    }
-  }
-
-  // Production with Gmail or other SMTP service
-  const config = {
-    host: process.env.EMAIL_HOST || 'smtp.gmail.com',
-    port: parseInt(process.env.EMAIL_PORT || '587', 10),
-    secure: process.env.EMAIL_SECURE === 'true', // true for 465, false for other ports
+// Create transporter for Gmail
+const createTransporter = () => {
+  console.log("Creating Gmail transporter with user:", process.env.EMAIL_USER);
+  return nodemailer.createTransport({
+    service: "gmail",
     auth: {
       user: process.env.EMAIL_USER,
       pass: process.env.EMAIL_PASS,
     },
-    tls: {
-      // Do not fail on invalid certs
-      rejectUnauthorized: process.env.NODE_ENV === 'production' ? true : false
-    },
-    // Timeouts
-    connectionTimeout: 30000, // 30 seconds
-    greetingTimeout: 30000,   // 30 seconds
-    socketTimeout: 60000,     // 60 seconds
-    // Debug
-    debug: process.env.NODE_ENV !== 'production',
-    logger: process.env.NODE_ENV !== 'production'
-  };
-
-  // If service is specified, it will override host/port
-  if (process.env.EMAIL_SERVICE) {
-    config.service = process.env.EMAIL_SERVICE;
-    delete config.host;
-    delete config.port;
-  }
-
-  console.log('Creating email transporter with config:', {
-    ...config,
-    auth: { ...config.auth, pass: '***' } // Don't log password
   });
+};
 
-  return nodemailer.createTransport(config);
-}
-
-// Initialize transporter with retry logic
-const MAX_RETRIES = 3;
-const RETRY_DELAY = 5000; // 5 seconds
-
-async function initializeEmailService(retryCount = 0) {
-  try {
-    console.log(`Initializing email service (attempt ${retryCount + 1}/${MAX_RETRIES})`);
-    
-    // Create new transporter
-    const newTransporter = await createTransporter();
-    
-    // Test the connection
-    await newTransporter.verify();
-    
-    // If we get here, connection is good
-    transporter = newTransporter;
-    console.log('✅ Email server is ready to take our messages');
-    return true;
-    
-  } catch (error) {
-    console.error(`❌ Email service initialization failed (attempt ${retryCount + 1}):`, error.message);
-    
-    if (retryCount < MAX_RETRIES - 1) {
-      console.log(`Retrying in ${RETRY_DELAY/1000} seconds...`);
-      await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
-      return initializeEmailService(retryCount + 1);
-    } else {
-      console.error('❌ Max retries reached. Email service is not available.');
-      if (process.env.NODE_ENV !== 'production') {
-        console.warn('In development, you can use ethereal.email for testing.');
-      }
-      return false;
-    }
-  }
-}
-
-// Start the email service
-initializeEmailService().then(success => {
-  if (!success) {
-    console.warn('Email service is not available. Some features may not work.');
-  }
-});
-
-async function sendOtpEmail(to, otp) {
+// Initialize transporter
+const initializeTransporter = () => {
   if (!transporter) {
-    throw new Error('Email transporter not initialized');
+    transporter = createTransporter();
+    // Verify transporter connection
+    transporter.verify((error, success) => {
+      if (error) {
+        console.error("Email transporter verification failed:", error);
+      } else {
+        console.log("✅ Email transporter is ready:", success);
+      }
+    });
   }
+  return transporter;
+};
 
-  const mailOptions = {
-    from: process.env.EMAIL_FROM || `"Hotel Chandra Bharti" <${process.env.EMAIL_USER}>`,
-    to,
-    subject: "Your OTP Code",
-    text: `Your OTP is ${otp}. Valid for 5 minutes.`,
-    html: `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <h2>Your OTP Code</h2>
-        <p>Your one-time password is: <strong>${otp}</strong></p>
-        <p>This code is valid for 5 minutes.</p>
-        <p>If you didn't request this, please ignore this email.</p>
-        <hr>
-        <p>Best regards,<br>Hotel Chandra Bharti Team</p>
-      </div>
-    `
-  };
-
+// Send OTP Email
+const sendOtpEmail = async (to, otp) => {
   try {
-    const info = await transporter.sendMail(mailOptions);
-    
-    // In development/test, log the preview URL
-    if (process.env.NODE_ENV !== 'production') {
-      console.log('Preview URL: %s', nodemailer.getTestMessageUrl(info));
-    }
-    
+    console.log("📧 Sending OTP email to:", to);
+    const emailTransporter = initializeTransporter();
+
+    const mailOptions = {
+      from: process.env.EMAIL_USER,
+      to: to,
+      subject: "Your OTP Code - Hotel Chandra Bharti",
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
+          <div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
+            <h2 style="color: #2c3e50;">Your OTP Code</h2>
+            <p>Hello,</p>
+            <p>Your one-time password for Hotel Chandra Bharti is:</p>
+            <div style="background-color: #e9ecef; padding: 15px; margin: 20px 0; text-align: center; font-size: 28px; font-weight: bold; letter-spacing: 3px;">
+              ${otp}
+            </div>
+            <p>This code is valid for 5 minutes.</p>
+            <p>If you didn't request this code, please ignore this email.</p>
+            <hr style="border: 0; border-top: 1px solid #ddd; margin: 20px 0;">
+            <p style="font-size: 14px; color: #6c757d;">
+              Best regards,<br>
+              <strong>Hotel Chandra Bharti Team</strong>
+            </p>
+          </div>
+        </div>
+      `,
+    };
+
+    const info = await emailTransporter.sendMail(mailOptions);
+    console.log("✅ OTP email sent successfully:", info.response);
     return info;
   } catch (error) {
-    console.error('Email sending failed:', {
-      error: error.message,
-      to,
-      time: new Date().toISOString()
-    });
-    throw new Error(`Failed to send email: ${error.message}`);
+    console.error("❌ Error sending OTP email:", error);
+    throw error;
   }
-}
+};
 
-// Export for testing
-module.exports = { 
+// Send Booking Confirmation Email
+const sendBookingEmail = async (to, bookingDetails) => {
+  try {
+    const emailTransporter = initializeTransporter();
+
+    const mailOptions = {
+      from: process.env.EMAIL_USER,
+      to: to,
+      subject: "Booking Confirmation - Hotel Chandra Bharti",
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
+          <div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
+            <h2 style="color: #2c3e50;">Booking Confirmation</h2>
+            <p>Hello ${bookingDetails.name},</p>
+            <p>Your booking request has been submitted successfully. Our team will confirm your booking shortly.</p>
+            <div style="background-color: #e9ecef; padding: 15px; margin: 20px 0; border-radius: 5px;">
+              <p><strong>Booking Details:</strong></p>
+              <p>Type: ${bookingDetails.bookingType}</p>
+              <p>Date: ${new Date(bookingDetails.bookingDate).toLocaleDateString()}</p>
+              <p>Time: ${bookingDetails.bookingTime}</p>
+              <p>Guests: ${bookingDetails.guests}</p>
+            </div>
+            <p>You will receive a confirmation email once admin approves your booking.</p>
+            <hr style="border: 0; border-top: 1px solid #ddd; margin: 20px 0;">
+            <p style="font-size: 14px; color: #6c757d;">
+              Best regards,<br>
+              <strong>Hotel Chandra Bharti Team</strong>
+            </p>
+          </div>
+        </div>
+      `,
+    };
+
+    const info = await emailTransporter.sendMail(mailOptions);
+    console.log("Booking confirmation email sent:", info.response);
+    return info;
+  } catch (error) {
+    console.error("Error sending booking email:", error);
+    throw error;
+  }
+};
+
+// Send Contact Form Reply
+const sendContactReply = async (to, reply) => {
+  try {
+    const emailTransporter = initializeTransporter();
+
+    const mailOptions = {
+      from: process.env.EMAIL_USER,
+      to: to,
+      subject: "Re: Your Message - Hotel Chandra Bharti",
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
+          <div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
+            <h2 style="color: #2c3e50;">We've Responded to Your Message</h2>
+            <p>Hello,</p>
+            <p>Thank you for contacting Hotel Chandra Bharti. Here's our response:</p>
+            <div style="background-color: #e9ecef; padding: 15px; margin: 20px 0; border-radius: 5px;">
+              <p>${reply}</p>
+            </div>
+            <p>If you have any further questions, please don't hesitate to contact us.</p>
+            <hr style="border: 0; border-top: 1px solid #ddd; margin: 20px 0;">
+            <p style="font-size: 14px; color: #6c757d;">
+              Best regards,<br>
+              <strong>Hotel Chandra Bharti Team</strong>
+            </p>
+          </div>
+        </div>
+      `,
+    };
+
+    const info = await emailTransporter.sendMail(mailOptions);
+    console.log("Contact reply email sent:", info.response);
+    return info;
+  } catch (error) {
+    console.error("Error sending contact reply:", error);
+    throw error;
+  }
+};
+
+// Send Booking Status Email (Confirmed, Rejected, Cancelled)
+const sendBookingStatusEmail = async (to, bookingDetails) => {
+  try {
+    const emailTransporter = initializeTransporter();
+    
+    const statusMessages = {
+      confirmed: { title: "✅ Booking Confirmed", color: "#28a745" },
+      rejected: { title: "❌ Booking Rejected", color: "#dc3545" },
+      cancelled: { title: "⛔ Booking Cancelled", color: "#fd7e14" }
+    };
+
+    const statusInfo = statusMessages[bookingDetails.status];
+
+    const mailOptions = {
+      from: process.env.EMAIL_USER,
+      to: to,
+      subject: `${statusInfo.title} - Hotel Chandra Bharti`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
+          <div style="background-color: #f8f9fa; padding: 20px; border-radius: 5px;">
+            <h2 style="color: ${statusInfo.color};">${statusInfo.title}</h2>
+            <p>Hello ${bookingDetails.name},</p>
+            <p>Your booking request has been <strong>${bookingDetails.status}</strong> by our admin team.</p>
+            <div style="background-color: #e9ecef; padding: 15px; margin: 20px 0; border-radius: 5px;">
+              <p><strong>Booking Details:</strong></p>
+              <p>Type: ${bookingDetails.bookingType}</p>
+              <p>Date: ${new Date(bookingDetails.bookingDate).toLocaleDateString()}</p>
+              <p>Time: ${bookingDetails.bookingTime}</p>
+              <p>Guests: ${bookingDetails.guests}</p>
+            </div>
+            ${bookingDetails.status === "confirmed" 
+              ? "<p><strong>Thank you for choosing Hotel Chandra Bharti! We look forward to hosting you.</strong></p>" 
+              : bookingDetails.status === "rejected"
+              ? "<p>If you have any questions, please contact us.</p>"
+              : "<p>Your booking has been cancelled. If you'd like to make another reservation, feel free to contact us.</p>"
+            }
+            <hr style="border: 0; border-top: 1px solid #ddd; margin: 20px 0;">
+            <p style="font-size: 14px; color: #6c757d;">
+              Best regards,<br>
+              <strong>Hotel Chandra Bharti Team</strong>
+            </p>
+          </div>
+        </div>
+      `,
+    };
+
+    const info = await emailTransporter.sendMail(mailOptions);
+    console.log("✅ Booking status email sent:", info.response);
+    return info;
+  } catch (error) {
+    console.error("❌ Error sending booking status email:", error);
+    throw error;
+  }
+};
+
+module.exports = {
   sendOtpEmail,
-  createTransporter,
-  getTransporter: () => transporter
+  sendBookingEmail,
+  sendContactReply,
+  sendBookingStatusEmail,
 };
