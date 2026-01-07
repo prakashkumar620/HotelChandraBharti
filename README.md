@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # 🏨 Hotel Chandra Bharti - Full Stack Management Website
 
 A comprehensive hotel management system with customer and admin dashboards, built with React, Node.js, Express, and MongoDB.
@@ -255,3 +256,6 @@ For issues or questions, please check the IMPLEMENTATION_GUIDE.md
 ---
 
 **Made with ❤️ for Hotel Chandra Bharti**
+=======
+# HotelChandraBharti
+>>>>>>> d23eca56cec837d08ecad35c39998fa6dd0b0238
